@@ -19,7 +19,7 @@ This project is inspired by [ccusage](https://github.com/ryoppippi/ccusage) and 
 
 - 🔌 **Multi-Provider Support**: Claude, Codex, OpenCode, Amp, and Pi Agent
 - 📊 **Multiple Report Types**: Daily, weekly, monthly, session, and billing block views
-- 💰 **Accurate Cost Calculation**: Uses latest LiteLLM pricing data with offline fallback
+- 💰 **Cost Estimation**: Calculates costs from [LiteLLM](https://github.com/BerriAI/litellm) pricing data (see [Pricing & Cost Estimates](#pricing--cost-estimates))
 - 🔍 **Automatic Discovery**: Finds provider data directories across platforms
 - 📈 **Flexible Output**: Table format for humans, JSON for machines
 - 🚀 **High Performance**: Stream processing with minimal memory footprint
@@ -111,6 +111,7 @@ ccstat codex daily               # Codex daily usage
 ccstat opencode monthly          # OpenCode monthly usage
 ccstat amp session               # Amp session analysis
 ccstat pi daily                  # Pi Agent daily usage
+ccstat all monthly               # All providers combined
 
 # Show statusline for Claude Code integration
 ccstat statusline
@@ -342,6 +343,35 @@ The `--max-cost` option allows you to customize the cost limit used for:
 - Status indicators (WITHIN LIMITS/APPROACHING LIMIT/OVER LIMIT)
 
 If not specified, the tool automatically uses the highest historical cost from your billing blocks.
+
+### Pricing & Cost Estimates
+
+Cost figures are **estimates**, not invoices. Here's how they're calculated:
+
+**Data source:** Pricing is fetched at runtime from the [LiteLLM pricing data](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) on GitHub. An embedded snapshot in `crates/ccstat-pricing/embedded/pricing.json` serves as an offline fallback when the network is unavailable. The embedded data is updated manually — it is not auto-refreshed.
+
+**Cache token pricing:** Many models (Claude, GPT-5.x, etc.) support prompt caching, where cached input tokens are billed at a discounted rate (typically 10% of the standard input price). ccstat uses the `cache_read_input_token_cost` field from LiteLLM data when available. If a model's cache pricing is not in LiteLLM, cache read tokens are priced at the standard input rate.
+
+**When costs may be inaccurate:**
+- New or recently released models may not have pricing data in LiteLLM yet
+- Enterprise/volume discounts, credits, or free tiers are not reflected
+- Some providers (Codex) don't report cache creation tokens, only cache reads
+- Models used through non-standard providers may match incorrect pricing via fuzzy lookup
+- The embedded pricing snapshot may be stale — costs may differ from the live LiteLLM data
+
+**Cost calculation modes:**
+
+```bash
+# Auto (default) - uses pre-calculated cost from provider data when available,
+# otherwise calculates from token counts × LiteLLM pricing
+ccstat daily --mode auto
+
+# Always calculate from tokens × pricing (ignores provider-provided costs)
+ccstat daily --mode calculate
+
+# Only use pre-calculated costs from provider data (errors if unavailable)
+ccstat daily --mode display
+```
 
 ### Cost Calculation Modes
 
@@ -647,5 +677,5 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## Acknowledgments
 
 - [ccusage](https://github.com/ryoppippi/ccusage) - The original TypeScript implementation that inspired this project
-- LiteLLM for model pricing data
+- [LiteLLM](https://github.com/BerriAI/litellm) for model pricing data
 - Claude by Anthropic for the usage data format
