@@ -106,15 +106,28 @@ impl CostCalculator {
     pub fn calculate_from_pricing(tokens: &TokenCounts, pricing: &ModelPricing) -> f64 {
         let mut cost = 0.0;
 
+        // Subtract cache tokens from input to avoid double-counting.
+        // OpenAI and Anthropic report input_tokens as the total (including cached portion),
+        // so we must charge only the non-cached remainder at the full input rate.
+        let cache_total = tokens.cache_creation_tokens + tokens.cache_read_tokens;
+        let non_cached_input = tokens.input_tokens.saturating_sub(cache_total);
+
         if let Some(rate) = pricing.input_cost_per_token {
-            cost += tokens.input_tokens as f64 * rate;
+            cost += non_cached_input as f64 * rate;
         }
 
         if let Some(rate) = pricing.output_cost_per_token {
             cost += tokens.output_tokens as f64 * rate;
         }
 
-        if let Some(rate) = pricing.cache_creation_input_token_cost {
+        // Fall back to the regular input rate when the provider (e.g. OpenAI)
+        // does not publish a separate cache-creation price tier.  This keeps
+        // costs correct after we reclassified non-cached Codex input as cache
+        // creation in the data loader.
+        let create_rate = pricing
+            .cache_creation_input_token_cost
+            .or(pricing.input_cost_per_token);
+        if let Some(rate) = create_rate {
             cost += tokens.cache_creation_tokens as f64 * rate;
         }
 
@@ -200,9 +213,10 @@ mod tests {
 
         let cost = CostCalculator::calculate_from_pricing(&tokens, &pricing);
 
-        // Expected: (1000 * 0.00001) + (500 * 0.00002) + (100 * 0.000015) + (50 * 0.000001)
-        // = 0.01 + 0.01 + 0.0015 + 0.00005 = 0.02155
-        assert!((cost - 0.02155).abs() < 0.000001);
+        // Expected: ((1000 - 100 - 50) * 0.00001) + (500 * 0.00002) + (100 * 0.000015) + (50 * 0.000001)
+        // = (850 * 0.00001) + 0.01 + 0.0015 + 0.00005
+        // = 0.0085 + 0.01 + 0.0015 + 0.00005 = 0.02005
+        assert!((cost - 0.02005).abs() < 0.000001);
     }
 
     #[test]
@@ -217,8 +231,9 @@ mod tests {
 
         let cost = CostCalculator::calculate_from_pricing(&tokens, &pricing);
 
-        // Expected: (1000 * 0.00001) + (500 * 0.00002) = 0.01 + 0.01 = 0.02
-        assert!((cost - 0.02).abs() < 0.000001);
+        // Expected: ((1000 - 100 - 50) * 0.00001) + (500 * 0.00002)
+        // = (850 * 0.00001) + 0.01 = 0.0085 + 0.01 = 0.0185
+        assert!((cost - 0.0185).abs() < 0.000001);
     }
 
     #[test]
@@ -247,9 +262,10 @@ mod tests {
         };
 
         let cost = CostCalculator::calculate_from_pricing(&tokens, &pricing);
-        // Expected: (10M * 0.00001) + (5M * 0.00002) + (1M * 0.000015) + (500k * 0.000001)
-        // = 100 + 100 + 15 + 0.5 = 215.5
-        assert!((cost - 215.5).abs() < 0.01);
+        // Expected: ((10M - 1M - 500k) * 0.00001) + (5M * 0.00002) + (1M * 0.000015) + (500k * 0.000001)
+        // = (8.5M * 0.00001) + 100 + 15 + 0.5
+        // = 85 + 100 + 15 + 0.5 = 200.5
+        assert!((cost - 200.5).abs() < 0.01);
     }
 
     #[test]
@@ -295,9 +311,30 @@ mod tests {
         };
 
         let cost = CostCalculator::calculate_from_pricing(&tokens, &pricing);
-        // Should handle very small numbers without precision issues
+        // Expected: non_cached = 1 - 1 - 1 = 0 (saturating), so input cost = 0
+        // output = 1 * 2e-9, cache_creation = 1 * 1.5e-9, cache_read = 1 * 1e-10
+        // total ≈ 3.6e-9
         assert!(cost > 0.0);
         assert!(cost < 0.00001);
+    }
+
+    #[test]
+    fn test_no_double_counting_cache_tokens() {
+        // Verify that cached tokens are NOT charged at the full input rate.
+        // This test would fail under the old (buggy) logic.
+        let tokens = TokenCounts::new(1000, 0, 0, 1000);
+        let pricing = ModelPricing {
+            input_cost_per_token: Some(0.01),
+            output_cost_per_token: None,
+            cache_creation_input_token_cost: None,
+            cache_read_input_token_cost: Some(0.001),
+        };
+
+        let cost = CostCalculator::calculate_from_pricing(&tokens, &pricing);
+
+        // Old (buggy): 1000*0.01 + 1000*0.001 = 10 + 1 = 11
+        // New (correct): (1000-1000)*0.01 + 1000*0.001 = 0 + 1 = 1
+        assert!((cost - 1.0).abs() < 0.000001);
     }
 
     #[tokio::test]

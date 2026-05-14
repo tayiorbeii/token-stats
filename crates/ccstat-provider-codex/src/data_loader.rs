@@ -240,6 +240,15 @@ async fn parse_session_file(path: &PathBuf, session_id: &str) -> Result<Vec<Usag
 }
 
 /// Compute per-event delta tokens from cumulative or last_token_usage data.
+///
+/// Codex reports `input_tokens` as the **total** input (including cached),
+/// whereas ccstat's `TokenCounts` treats `input_tokens`, `cache_creation_tokens`,
+/// and `cache_read_tokens` as **disjoint** categories (matching Anthropic's API).
+///
+/// We convert by reclassifying the non-cached portion of input as cache creation:
+///   cache_creation = input_delta − cache_read_delta
+///   input          = 0
+///   cache_read     = cached_input_tokens_delta
 fn compute_delta(info: &TokenInfo, prev: Option<&CumulativeTokens>) -> TokenCounts {
     // Prefer last_token_usage when available (already a delta)
     if let Some(last) = &info.last_token_usage {
@@ -248,7 +257,8 @@ fn compute_delta(info: &TokenInfo, prev: Option<&CumulativeTokens>) -> TokenCoun
         } else {
             last.cache_read_tokens
         };
-        return TokenCounts::new(last.input_tokens, last.output_tokens, 0, cache_read);
+        let cache_create = last.input_tokens.saturating_sub(cache_read);
+        return TokenCounts::new(0, last.output_tokens, cache_create, cache_read);
     }
 
     // Fall back to cumulative-to-delta conversion
@@ -271,11 +281,15 @@ fn compute_delta(info: &TokenInfo, prev: Option<&CumulativeTokens>) -> TokenCoun
             None => (0, 0, 0),
         };
 
+        let input_delta = total.input_tokens.saturating_sub(prev_input);
+        let cache_read_delta = cache_read_total.saturating_sub(prev_cache_read);
+        let cache_create_delta = input_delta.saturating_sub(cache_read_delta);
+
         TokenCounts::new(
-            total.input_tokens.saturating_sub(prev_input),
-            total.output_tokens.saturating_sub(prev_output),
             0,
-            cache_read_total.saturating_sub(prev_cache_read),
+            total.output_tokens.saturating_sub(prev_output),
+            cache_create_delta,
+            cache_read_delta,
         )
     } else {
         TokenCounts::new(0, 0, 0, 0)
@@ -360,9 +374,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].tokens.input_tokens, 100);
+        // Codex input_tokens includes cached; with cached=0 the full input
+        // is reclassified as cache_creation and input becomes 0.
+        assert_eq!(entries[0].tokens.input_tokens, 0);
+        assert_eq!(entries[0].tokens.cache_creation_tokens, 100);
         assert_eq!(entries[0].tokens.output_tokens, 50);
-        assert_eq!(entries[1].tokens.input_tokens, 200);
+        assert_eq!(entries[1].tokens.input_tokens, 0);
+        assert_eq!(entries[1].tokens.cache_creation_tokens, 200);
         assert_eq!(entries[1].tokens.output_tokens, 100);
     }
 
@@ -388,7 +406,9 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         // Should use last_token_usage (50, 20), not cumulative (500, 200)
-        assert_eq!(entries[0].tokens.input_tokens, 50);
+        // last has no cached tokens, so all 50 input → cache_creation
+        assert_eq!(entries[0].tokens.input_tokens, 0);
+        assert_eq!(entries[0].tokens.cache_creation_tokens, 50);
         assert_eq!(entries[0].tokens.output_tokens, 20);
     }
 
