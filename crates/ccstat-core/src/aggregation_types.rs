@@ -6,6 +6,17 @@
 use crate::types::{DailyDate, ModelName, SessionId, TokenCounts};
 use serde::{Deserialize, Serialize};
 
+/// Per-model cost and token breakdown
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCostBreakdown {
+    /// Model name
+    pub model: String,
+    /// Token counts for this model
+    pub tokens: TokenCounts,
+    /// Total cost for this model
+    pub cost: f64,
+}
+
 /// Daily usage summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyUsage {
@@ -17,6 +28,9 @@ pub struct DailyUsage {
     pub total_cost: f64,
     /// List of unique models used during the day
     pub models_used: Vec<String>,
+    /// Per-model cost and token breakdown
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_breakdown: Vec<ModelCostBreakdown>,
     /// Individual entries for verbose mode (only populated when verbose flag is set)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entries: Option<Vec<VerboseEntry>>,
@@ -50,6 +64,9 @@ pub struct DailyInstanceUsage {
     pub total_cost: f64,
     /// Models used during the day
     pub models_used: Vec<String>,
+    /// Per-model cost and token breakdown
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_breakdown: Vec<ModelCostBreakdown>,
 }
 
 /// Session usage summary
@@ -80,6 +97,9 @@ pub struct MonthlyUsage {
     pub total_cost: f64,
     /// Number of days with usage in this month
     pub active_days: usize,
+    /// Per-model cost and token breakdown
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_breakdown: Vec<ModelCostBreakdown>,
 }
 
 /// Weekly usage summary

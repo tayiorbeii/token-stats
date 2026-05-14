@@ -65,8 +65,8 @@ use std::sync::Arc;
 
 // Re-export aggregation data types from ccstat-core
 pub use ccstat_core::aggregation_types::{
-    DailyInstanceUsage, DailyUsage, MonthlyUsage, SessionBlock, SessionUsage, Totals, VerboseEntry,
-    WeeklyUsage,
+    DailyInstanceUsage, DailyUsage, ModelCostBreakdown, MonthlyUsage, SessionBlock, SessionUsage,
+    Totals, VerboseEntry, WeeklyUsage,
 };
 
 /// Accumulator for daily aggregation
@@ -74,6 +74,7 @@ struct DailyAccumulator {
     tokens: TokenCounts,
     cost: f64,
     models: HashSet<ModelName>,
+    model_costs: BTreeMap<String, (TokenCounts, f64)>,
     verbose_entries: Option<Vec<VerboseEntry>>,
 }
 
@@ -83,6 +84,7 @@ impl DailyAccumulator {
             tokens: TokenCounts::default(),
             cost: 0.0,
             models: HashSet::new(),
+            model_costs: BTreeMap::new(),
             verbose_entries: if detailed { Some(Vec::new()) } else { None },
         }
     }
@@ -91,6 +93,13 @@ impl DailyAccumulator {
         self.tokens += entry.tokens;
         self.cost += calculated_cost;
         self.models.insert(entry.model.clone());
+
+        let mc = self
+            .model_costs
+            .entry(entry.model.to_string())
+            .or_insert((TokenCounts::default(), 0.0));
+        mc.0 += entry.tokens;
+        mc.1 += calculated_cost;
 
         if let Some(ref mut entries) = self.verbose_entries {
             entries.push(VerboseEntry {
@@ -107,11 +116,27 @@ impl DailyAccumulator {
         let mut models_used: Vec<String> = self.models.into_iter().map(|m| m.to_string()).collect();
         models_used.sort();
 
+        let mut model_breakdown: Vec<ModelCostBreakdown> = self
+            .model_costs
+            .into_iter()
+            .map(|(model, (tokens, cost))| ModelCostBreakdown {
+                model,
+                tokens,
+                cost,
+            })
+            .collect();
+        model_breakdown.sort_by(|a, b| {
+            b.cost
+                .partial_cmp(&a.cost)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         DailyUsage {
             date,
             tokens: self.tokens,
             total_cost: self.cost,
             models_used,
+            model_breakdown,
             entries: self.verbose_entries,
         }
     }
@@ -166,6 +191,65 @@ impl SessionAccumulator {
             model: self
                 .primary_model
                 .unwrap_or_else(|| ModelName::new("unknown")),
+        }
+    }
+}
+
+/// Accumulator for monthly aggregation
+struct MonthlyAccumulator {
+    tokens: TokenCounts,
+    cost: f64,
+    days: usize,
+    model_costs: BTreeMap<String, (TokenCounts, f64)>,
+}
+
+impl MonthlyAccumulator {
+    fn new() -> Self {
+        Self {
+            tokens: TokenCounts::default(),
+            cost: 0.0,
+            days: 0,
+            model_costs: BTreeMap::new(),
+        }
+    }
+
+    fn add_daily(&mut self, daily: &DailyUsage) {
+        self.tokens += daily.tokens;
+        self.cost += daily.total_cost;
+        self.days += 1;
+
+        for mb in &daily.model_breakdown {
+            let mc = self
+                .model_costs
+                .entry(mb.model.clone())
+                .or_insert((TokenCounts::default(), 0.0));
+            mc.0 += mb.tokens;
+            mc.1 += mb.cost;
+        }
+    }
+
+    fn into_monthly_usage(self, month: String) -> MonthlyUsage {
+        let mut model_breakdown: Vec<ModelCostBreakdown> = self
+            .model_costs
+            .into_iter()
+            .map(|(model, (tokens, cost))| ModelCostBreakdown {
+                model,
+                tokens,
+                cost,
+            })
+            .collect();
+        model_breakdown.sort_by(|a, b| {
+            b.cost
+                .partial_cmp(&a.cost)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        MonthlyUsage {
+            month,
+            tokens: self.tokens,
+            total_cost: self.cost,
+            active_days: self.days,
+            model_breakdown,
         }
     }
 }
@@ -275,12 +359,28 @@ impl Aggregator {
                     acc.models.into_iter().map(|m| m.to_string()).collect();
                 models_used.sort();
 
+                let mut model_breakdown: Vec<ModelCostBreakdown> = acc
+                    .model_costs
+                    .into_iter()
+                    .map(|(model, (tokens, cost))| ModelCostBreakdown {
+                        model,
+                        tokens,
+                        cost,
+                    })
+                    .collect();
+                model_breakdown.sort_by(|a, b| {
+                    b.cost
+                        .partial_cmp(&a.cost)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+
                 DailyInstanceUsage {
                     date,
                     instance_id,
                     tokens: acc.tokens,
                     total_cost: acc.cost,
                     models_used,
+                    model_breakdown,
                 }
             })
             .collect())
@@ -427,27 +527,19 @@ impl Aggregator {
 
     /// Aggregate daily usage into monthly summaries
     pub fn aggregate_monthly(daily_usage: &[DailyUsage]) -> Vec<MonthlyUsage> {
-        let mut monthly_map: BTreeMap<String, (TokenCounts, f64, usize)> = BTreeMap::new();
+        let mut monthly_map: BTreeMap<String, MonthlyAccumulator> = BTreeMap::new();
 
         for daily in daily_usage {
             let month = daily.date.format("%Y-%m");
-            let entry = monthly_map
+            monthly_map
                 .entry(month)
-                .or_insert((TokenCounts::default(), 0.0, 0));
-
-            entry.0 += daily.tokens;
-            entry.1 += daily.total_cost;
-            entry.2 += 1;
+                .or_insert_with(MonthlyAccumulator::new)
+                .add_daily(daily);
         }
 
         monthly_map
             .into_iter()
-            .map(|(month, (tokens, cost, days))| MonthlyUsage {
-                month,
-                tokens,
-                total_cost: cost,
-                active_days: days,
-            })
+            .map(|(month, acc)| acc.into_monthly_usage(month))
             .collect()
     }
 

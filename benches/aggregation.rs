@@ -100,6 +100,7 @@ fn benchmark_monthly_aggregation(c: &mut Criterion) {
             tokens: TokenCounts::new(1000, 500, 100, 50),
             total_cost: 0.025,
             models_used: vec!["claude-3-opus".to_string()],
+            model_breakdown: vec![],
             entries: None,
         });
     }

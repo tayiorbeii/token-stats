@@ -18,6 +18,7 @@
 //!         tokens: TokenCounts::new(1000, 500, 100, 50),
 //!         total_cost: 0.025,
 //!         models_used: vec!["claude-3-opus".to_string()],
+//!         model_breakdown: vec![],
 //!         entries: None,
 //!     },
 //! ];
@@ -129,6 +130,11 @@ impl TableFormatter {
         }
 
         result.chars().rev().collect()
+    }
+
+    /// Format a model name for display, respecting the full_model_names setting
+    fn format_model_display(&self, model: &str) -> String {
+        format_model_name(model, self.full_model_names)
     }
 
     /// Format currency with dollar sign
@@ -466,21 +472,24 @@ impl OutputFormatter for TableFormatter {
     }
 
     fn format_monthly(&self, data: &[MonthlyUsage], totals: &Totals) -> String {
-        let mut table = Table::new();
-        table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
-
-        table.set_titles(row![
-            b -> "Month",
-            b -> "Input",
-            b -> "Output",
-            b -> "Cache Create",
-            b -> "Cache Read",
-            b -> "Total",
-            b -> "Cost",
-            b -> "Active Days"
-        ]);
+        let mut output = String::new();
 
         for entry in data {
+            // Main summary table for this month
+            let mut table = Table::new();
+            table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+
+            table.set_titles(row![
+                b -> "Month",
+                b -> "Input",
+                b -> "Output",
+                b -> "Cache Create",
+                b -> "Cache Read",
+                b -> "Total",
+                b -> "Cost",
+                b -> "Active Days"
+            ]);
+
             table.add_row(row![
                 entry.month,
                 r -> Self::format_number(entry.tokens.input_tokens),
@@ -491,15 +500,61 @@ impl OutputFormatter for TableFormatter {
                 r -> Self::format_currency(entry.total_cost),
                 c -> entry.active_days
             ]);
+
+            output.push_str(&table.to_string());
+
+            // Model breakdown sub-table
+            if !entry.model_breakdown.is_empty() {
+                let mut model_table = Table::new();
+                model_table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+
+                model_table.set_titles(row![
+                    b -> "Model",
+                    b -> "Input",
+                    b -> "Output",
+                    b -> "Cache Create",
+                    b -> "Cache Read",
+                    b -> "Total",
+                    b -> "Cost"
+                ]);
+
+                for mb in &entry.model_breakdown {
+                    let model_display = self.format_model_display(&mb.model);
+                    model_table.add_row(row![
+                        format!("  {}", model_display),
+                        r -> Self::format_number(mb.tokens.input_tokens),
+                        r -> Self::format_number(mb.tokens.output_tokens),
+                        r -> Self::format_number(mb.tokens.cache_creation_tokens),
+                        r -> Self::format_number(mb.tokens.cache_read_tokens),
+                        r -> Self::format_number(mb.tokens.total()),
+                        r -> Self::format_currency(mb.cost)
+                    ]);
+                }
+
+                output.push('\n');
+                output.push_str(&model_table.to_string());
+            }
+
+            output.push('\n');
         }
 
-        // Add separator
-        table.add_row(Row::new(vec![Cell::new(""); 8]));
+        // Overall totals table
+        let mut totals_table = Table::new();
+        totals_table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+        totals_table.set_titles(row![
+            b -> "",
+            b -> "Input",
+            b -> "Output",
+            b -> "Cache Create",
+            b -> "Cache Read",
+            b -> "Total",
+            b -> "Cost",
+            b -> ""
+        ]);
+        totals_table.add_row(Self::format_totals_row(totals));
+        output.push_str(&totals_table.to_string());
 
-        // Add totals row
-        table.add_row(Self::format_totals_row(totals));
-
-        table.to_string()
+        output
     }
 
     fn format_weekly(&self, data: &[WeeklyUsage], totals: &Totals) -> String {
@@ -671,18 +726,37 @@ impl OutputFormatter for JsonFormatter {
 
     fn format_monthly(&self, data: &[MonthlyUsage], totals: &Totals) -> String {
         let output = json!({
-            "monthly": data.iter().map(|m| json!({
-                "month": m.month,
-                "tokens": {
-                    "input_tokens": m.tokens.input_tokens,
-                    "output_tokens": m.tokens.output_tokens,
-                    "cache_creation_tokens": m.tokens.cache_creation_tokens,
-                    "cache_read_tokens": m.tokens.cache_read_tokens,
-                    "total": m.tokens.total(),
-                },
-                "total_cost": m.total_cost,
-                "active_days": m.active_days,
-            })).collect::<Vec<_>>(),
+            "monthly": data.iter().map(|m| {
+                let mut month_json = json!({
+                    "month": m.month,
+                    "tokens": {
+                        "input_tokens": m.tokens.input_tokens,
+                        "output_tokens": m.tokens.output_tokens,
+                        "cache_creation_tokens": m.tokens.cache_creation_tokens,
+                        "cache_read_tokens": m.tokens.cache_read_tokens,
+                        "total": m.tokens.total(),
+                    },
+                    "total_cost": m.total_cost,
+                    "active_days": m.active_days,
+                });
+                if !m.model_breakdown.is_empty() {
+                    month_json.as_object_mut().unwrap().insert(
+                        "model_breakdown".to_string(),
+                        json!(m.model_breakdown.iter().map(|mb| json!({
+                            "model": mb.model,
+                            "tokens": {
+                                "input_tokens": mb.tokens.input_tokens,
+                                "output_tokens": mb.tokens.output_tokens,
+                                "cache_creation_tokens": mb.tokens.cache_creation_tokens,
+                                "cache_read_tokens": mb.tokens.cache_read_tokens,
+                                "total": mb.tokens.total(),
+                            },
+                            "cost": mb.cost,
+                        })).collect::<Vec<_>>()),
+                    );
+                }
+                month_json
+            }).collect::<Vec<_>>(),
             "totals": {
                 "tokens": {
                     "input_tokens": totals.tokens.input_tokens,
@@ -787,6 +861,7 @@ impl OutputFormatter for JsonFormatter {
 ///         tokens: TokenCounts::new(1000, 500, 0, 0),
 ///         total_cost: 0.025,
 ///         models_used: vec!["claude-3-opus".to_string()],
+///         model_breakdown: vec![],
 ///         entries: None,
 ///     },
 /// ];
@@ -844,6 +919,7 @@ mod tests {
             tokens: TokenCounts::new(100, 50, 10, 5),
             total_cost: 1.25,
             models_used: vec!["claude-3-opus".to_string()],
+            model_breakdown: vec![],
             entries: None,
         }];
         let totals = Totals::from_daily(&daily_data);
@@ -866,6 +942,7 @@ mod tests {
             tokens: TokenCounts::new(1000, 500, 100, 50),
             total_cost: 2.50,
             models_used: vec!["claude-3-opus".to_string(), "claude-3-sonnet".to_string()],
+            model_breakdown: vec![],
             entries: None,
         }];
         let totals = Totals::from_daily(&daily_data);
@@ -884,6 +961,7 @@ mod tests {
                 tokens: TokenCounts::new(1000, 500, 0, 0),
                 total_cost: 1.50,
                 models_used: vec!["claude-3-opus".to_string()],
+                model_breakdown: vec![],
                 entries: None,
             },
             DailyUsage {
@@ -891,6 +969,7 @@ mod tests {
                 tokens: TokenCounts::new(2000, 1000, 200, 100),
                 total_cost: 3.00,
                 models_used: vec!["claude-3-sonnet".to_string()],
+                model_breakdown: vec![],
                 entries: None,
             },
         ];
@@ -921,6 +1000,7 @@ mod tests {
             tokens: TokenCounts::new(100, 50, 10, 5),
             total_cost: 0.25,
             models_used: vec!["claude-3-opus".to_string()],
+            model_breakdown: vec![],
             entries: Some(vec![verbose_entry]),
         }];
 
@@ -946,6 +1026,7 @@ mod tests {
                 tokens: TokenCounts::new(1000, 500, 0, 0),
                 total_cost: 1.50,
                 models_used: vec!["claude-3-opus".to_string()],
+                model_breakdown: vec![],
             },
             DailyInstanceUsage {
                 date: DailyDate::new(NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()),
@@ -953,6 +1034,7 @@ mod tests {
                 tokens: TokenCounts::new(2000, 1000, 100, 50),
                 total_cost: 3.00,
                 models_used: vec!["claude-3-sonnet".to_string()],
+                model_breakdown: vec![],
             },
         ];
 
@@ -1003,12 +1085,14 @@ mod tests {
                 tokens: TokenCounts::new(100000, 50000, 10000, 5000),
                 total_cost: 150.00,
                 active_days: 15,
+                model_breakdown: vec![],
             },
             MonthlyUsage {
                 month: "2024-02".to_string(),
                 tokens: TokenCounts::new(200000, 100000, 20000, 10000),
                 total_cost: 300.00,
                 active_days: 20,
+                model_breakdown: vec![],
             },
         ];
 
@@ -1129,6 +1213,7 @@ mod tests {
             tokens: TokenCounts::new(1000, 500, 100, 50),
             total_cost: 2.50,
             models_used: vec!["claude-3-opus".to_string()],
+            model_breakdown: vec![],
             entries: None,
         }];
 
@@ -1154,6 +1239,7 @@ mod tests {
             tokens: TokenCounts::new(1000, 500, 0, 0),
             total_cost: 1.50,
             models_used: vec!["claude-3-opus".to_string()],
+            model_breakdown: vec![],
         }];
 
         let totals = Totals::from_daily_instances(&instance_data);
@@ -1201,6 +1287,7 @@ mod tests {
             tokens: TokenCounts::new(100000, 50000, 0, 0),
             total_cost: 150.00,
             active_days: 15,
+            model_breakdown: vec![],
         }];
 
         let totals = Totals::from_monthly(&monthly_data);
@@ -1282,6 +1369,7 @@ mod tests {
             tokens: TokenCounts::new(0, 0, 0, 0),
             total_cost: 0.0,
             models_used: vec![],
+            model_breakdown: vec![],
             entries: None,
         }];
         let zero_totals = Totals::from_daily(&zero_data);
@@ -1294,6 +1382,7 @@ mod tests {
             tokens: TokenCounts::new(999999999, 888888888, 777777777, 666666666),
             total_cost: 9999999.99,
             models_used: vec!["model".to_string()],
+            model_breakdown: vec![],
             entries: None,
         }];
         let large_totals = Totals::from_daily(&large_data);

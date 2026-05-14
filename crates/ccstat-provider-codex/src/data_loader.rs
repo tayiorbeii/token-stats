@@ -55,7 +55,6 @@ impl ProviderDataLoader for DataLoader {
             let mut jsonl_files = Vec::new();
             for entry in walkdir::WalkDir::new(&self.session_dir)
                 .min_depth(1)
-                .max_depth(1)
                 .into_iter()
                 .filter_map(|e| e.ok())
             {

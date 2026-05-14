@@ -99,6 +99,8 @@ pub enum Provider {
     Opencode,
     Amp,
     Pi,
+    /// All providers combined
+    All,
 }
 
 impl std::fmt::Display for Provider {
@@ -109,6 +111,7 @@ impl std::fmt::Display for Provider {
             Provider::Opencode => write!(f, "opencode"),
             Provider::Amp => write!(f, "amp"),
             Provider::Pi => write!(f, "pi"),
+            Provider::All => write!(f, "all"),
         }
     }
 }
@@ -251,6 +254,11 @@ pub enum Command {
         #[command(subcommand)]
         report: Report,
     },
+    /// All providers combined
+    All {
+        #[command(subcommand)]
+        report: Report,
+    },
 
     // -- Report shortcuts (implicit Claude provider) -------------------------
     /// Show daily usage summary (provider: claude)
@@ -290,6 +298,7 @@ pub fn resolve_provider_report(cmd: &Command) -> Option<(Provider, Report)> {
         Command::Opencode { report } => Some((Provider::Opencode, report)),
         Command::Amp { report } => Some((Provider::Amp, report)),
         Command::Pi { report } => Some((Provider::Pi, report)),
+        Command::All { report } => Some((Provider::All, report)),
 
         // Report shortcuts → Claude
         Command::Daily(args) => Some((Provider::Claude, Report::Daily(args))),
@@ -312,11 +321,11 @@ pub fn validate_provider_report(provider: Provider, report: &Report) -> Result<(
         // All providers support daily, monthly, session
         (_, Report::Daily(_) | Report::Monthly | Report::Session(_)) => true,
 
-        // Weekly: only Claude and OpenCode
-        (Provider::Claude | Provider::Opencode, Report::Weekly(_)) => true,
+        // Weekly: only Claude, OpenCode, and All
+        (Provider::Claude | Provider::Opencode | Provider::All, Report::Weekly(_)) => true,
 
-        // Blocks: only Claude
-        (Provider::Claude, Report::Blocks(_)) => true,
+        // Blocks: only Claude and All
+        (Provider::Claude | Provider::All, Report::Blocks(_)) => true,
 
         // Statusline: only Claude
         (Provider::Claude, Report::Statusline(_)) => true,

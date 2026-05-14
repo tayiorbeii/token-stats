@@ -161,6 +161,7 @@ async fn dispatch_provider_report(cli: &Cli, provider: Provider, report: &Report
         Provider::Pi => {
             dispatch_provider_with_loader::<ccstat_provider_pi::DataLoader>(cli, report, "pi").await
         }
+        Provider::All => dispatch_all_report(cli, report).await,
     }
 }
 
@@ -272,6 +273,116 @@ async fn dispatch_provider_with_loader<T: ProviderDataLoader>(
                 "Report type not supported for {} provider",
                 provider_name
             )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Dispatch a report across all providers, merging results.
+///
+/// Loads data from every provider sequentially, collects all `DailyUsage`
+/// into a single dataset, and produces a unified report with per-model
+/// cost breakdown across every agent harness.
+async fn dispatch_all_report(cli: &Cli, report: &Report) -> Result<()> {
+    info!("Running all-providers report");
+
+    let mut all_daily: Vec<ccstat::aggregation::DailyUsage> = Vec::new();
+
+    // Collect a helper closure that loads one provider and extends all_daily
+    macro_rules! collect_provider {
+        ($loader_expr:expr, $name:expr) => {
+            match $loader_expr {
+                Ok(daily) => all_daily.extend(daily),
+                Err(e) => {
+                    info!("Skipping {} provider: {}", $name, e);
+                }
+            }
+        };
+    }
+
+    // --- Claude ---
+    {
+        let sp = false;
+        let data_loader = init_data_loader(sp, cli.intern, cli.arena).await?;
+        let pricing_fetcher = Arc::new(PricingFetcher::new(false).await);
+        let cost_calculator = Arc::new(CostCalculator::new(pricing_fetcher));
+        let aggregator =
+            create_aggregator_with_timezone(cost_calculator, sp, cli.timezone.as_deref(), cli.utc)?;
+        let filter = build_usage_filter(cli, &aggregator)?;
+        let entries = Box::pin(data_loader.load_usage_entries_parallel());
+        let filtered = filter.filter_stream(entries).await;
+        let daily = aggregator.aggregate_daily(filtered, cli.mode).await;
+        collect_provider!(daily, "claude");
+    }
+
+    // --- Generic providers ---
+    macro_rules! load_generic {
+        ($loader_ty:ty, $name:expr) => {{
+            let sp = false;
+            let loader = <$loader_ty>::new().await;
+            match loader {
+                Ok(loader) => {
+                    let pricing_fetcher = Arc::new(PricingFetcher::new(false).await);
+                    let cost_calculator = Arc::new(CostCalculator::new(pricing_fetcher));
+                    let aggregator = create_aggregator_with_timezone(
+                        cost_calculator,
+                        sp,
+                        cli.timezone.as_deref(),
+                        cli.utc,
+                    )?;
+                    let filter = build_usage_filter(cli, &aggregator)?;
+                    let entries = loader.load_entries();
+                    let filtered = filter.filter_stream(entries).await;
+                    let daily = aggregator.aggregate_daily(filtered, cli.mode).await;
+                    collect_provider!(daily, $name);
+                }
+                Err(e) => {
+                    info!("Skipping {} provider: {}", $name, e);
+                }
+            }
+        }};
+    }
+
+    load_generic!(ccstat_provider_codex::DataLoader, "codex");
+    load_generic!(ccstat_provider_opencode::DataLoader, "opencode");
+    load_generic!(ccstat_provider_amp::DataLoader, "amp");
+    load_generic!(ccstat_provider_pi::DataLoader, "pi");
+
+    // Sort by date so aggregation is deterministic
+    all_daily.sort_by_key(|d| *d.date.inner());
+
+    match report {
+        Report::Daily(_) => {
+            let totals = Totals::from_daily(&all_daily);
+            let formatter = get_formatter(cli.json, cli.full_model_names);
+            println!("{}", formatter.format_daily(&all_daily, &totals));
+        }
+        Report::Monthly => {
+            let mut monthly_data = Aggregator::aggregate_monthly(&all_daily);
+            let mut month_filter = MonthFilter::new();
+            if let Some(since_str) = &cli.since {
+                let since_date = parse_date_filter(since_str)?;
+                month_filter = month_filter.with_since(since_date.year(), since_date.month());
+            }
+            if let Some(until_str) = &cli.until {
+                let until_date = parse_date_filter(until_str)?;
+                month_filter = month_filter.with_until(until_date.year(), until_date.month());
+            }
+            filter_monthly_data(&mut monthly_data, &month_filter);
+            let totals = Totals::from_monthly(&monthly_data);
+            let formatter = get_formatter(cli.json, cli.full_model_names);
+            println!("{}", formatter.format_monthly(&monthly_data, &totals));
+        }
+        Report::Session(_) => {
+            let totals = Totals::from_daily(&all_daily);
+            let formatter = get_formatter(cli.json, cli.full_model_names);
+            println!("{}", formatter.format_daily(&all_daily, &totals));
+        }
+        _ => {
+            return Err(CcstatError::Config(
+                "This report type is not supported for the 'all' provider".into(),
+            ));
         }
     }
 
