@@ -373,21 +373,6 @@ ccstat daily --mode calculate
 ccstat daily --mode display
 ```
 
-### Cost Calculation Modes
-
-Control how costs are calculated:
-
-```bash
-# Auto mode (default) - use pre-calculated when available
-ccstat daily --mode auto
-
-# Always calculate from tokens
-ccstat daily --mode calculate
-
-# Only use pre-calculated costs
-ccstat daily --mode display
-```
-
 ### Detailed Output Mode
 
 Get detailed token information for each API call:

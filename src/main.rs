@@ -22,7 +22,7 @@ use ccstat::{
 use chrono::Datelike;
 use clap::Parser;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Approximate maximum tokens for a 5-hour billing block
@@ -287,15 +287,17 @@ async fn dispatch_provider_with_loader<T: ProviderDataLoader>(
 async fn dispatch_all_report(cli: &Cli, report: &Report) -> Result<()> {
     info!("Running all-providers report");
 
+    let tz_config = TimezoneConfig::from_cli(cli.timezone.as_deref(), cli.utc)?;
     let mut all_daily: Vec<ccstat::aggregation::DailyUsage> = Vec::new();
+    let mut all_sessions: Vec<ccstat::aggregation::SessionUsage> = Vec::new();
 
-    // Collect a helper closure that loads one provider and extends all_daily
+    // Collect a helper closure that loads one provider and extends the requested target
     macro_rules! collect_provider {
-        ($loader_expr:expr, $name:expr) => {
-            match $loader_expr {
-                Ok(daily) => all_daily.extend(daily),
+        ($result_expr:expr, $name:expr, $target:expr) => {
+            match $result_expr {
+                Ok(data) => $target.extend(data),
                 Err(e) => {
-                    info!("Skipping {} provider: {}", $name, e);
+                    warn!("Skipping {} provider: {}", $name, e);
                 }
             }
         };
@@ -312,8 +314,14 @@ async fn dispatch_all_report(cli: &Cli, report: &Report) -> Result<()> {
         let filter = build_usage_filter(cli, &aggregator)?;
         let entries = Box::pin(data_loader.load_usage_entries_parallel());
         let filtered = filter.filter_stream(entries).await;
-        let daily = aggregator.aggregate_daily(filtered, cli.mode).await;
-        collect_provider!(daily, "claude");
+
+        if matches!(report, Report::Session(_)) {
+            let sessions = aggregator.aggregate_sessions(filtered, cli.mode).await;
+            collect_provider!(sessions, "claude", &mut all_sessions);
+        } else {
+            let daily = aggregator.aggregate_daily(filtered, cli.mode).await;
+            collect_provider!(daily, "claude", &mut all_daily);
+        }
     }
 
     // --- Generic providers ---
@@ -334,11 +342,17 @@ async fn dispatch_all_report(cli: &Cli, report: &Report) -> Result<()> {
                     let filter = build_usage_filter(cli, &aggregator)?;
                     let entries = loader.load_entries();
                     let filtered = filter.filter_stream(entries).await;
-                    let daily = aggregator.aggregate_daily(filtered, cli.mode).await;
-                    collect_provider!(daily, $name);
+
+                    if matches!(report, Report::Session(_)) {
+                        let sessions = aggregator.aggregate_sessions(filtered, cli.mode).await;
+                        collect_provider!(sessions, $name, &mut all_sessions);
+                    } else {
+                        let daily = aggregator.aggregate_daily(filtered, cli.mode).await;
+                        collect_provider!(daily, $name, &mut all_daily);
+                    }
                 }
                 Err(e) => {
-                    info!("Skipping {} provider: {}", $name, e);
+                    warn!("Skipping {} provider: {}", $name, e);
                 }
             }
         }};
@@ -349,8 +363,9 @@ async fn dispatch_all_report(cli: &Cli, report: &Report) -> Result<()> {
     load_generic!(ccstat_provider_amp::DataLoader, "amp");
     load_generic!(ccstat_provider_pi::DataLoader, "pi");
 
-    // Sort by date so aggregation is deterministic
+    // Sort deterministically for stable output
     all_daily.sort_by_key(|d| *d.date.inner());
+    all_sessions.sort_by_key(|s| s.start_time);
 
     match report {
         Report::Daily(_) => {
@@ -375,9 +390,12 @@ async fn dispatch_all_report(cli: &Cli, report: &Report) -> Result<()> {
             println!("{}", formatter.format_monthly(&monthly_data, &totals));
         }
         Report::Session(_) => {
-            let totals = Totals::from_daily(&all_daily);
+            let totals = Totals::from_sessions(&all_sessions);
             let formatter = get_formatter(cli.json, cli.full_model_names);
-            println!("{}", formatter.format_daily(&all_daily, &totals));
+            println!(
+                "{}",
+                formatter.format_sessions(&all_sessions, &totals, &tz_config.tz)
+            );
         }
         _ => {
             return Err(CcstatError::Config(

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ccstat all` command — aggregate usage across all providers (Claude, Codex, OpenCode, Amp, Pi) into a single unified report
+- Per-model cost breakdown in monthly output showing each model's tokens and cost sorted by cost descending
+- `Provider::All` and `Command::All` CLI variants for multi-provider orchestration
+- `ModelCostBreakdown` struct for per-model cost tracking in `DailyAccumulator`/`MonthlyAccumulator`
+- README Pricing & Cost Estimates section documenting LiteLLM data source and caveats
+
+### Changed
+- Codex provider now walks session directories recursively (removed `max_depth(1)`) to discover files in YYYY/MM/DD subdirectories
+- Cost mode enum simplified: removed `Fetch`, `Offline`, `None` variants (kept `Auto`, `Calculate`, `Display`)
+- Updated embedded pricing.json to latest LiteLLM snapshot
+
+### Fixed
+- Codex model detection now reads from `payload.model` in `turn_context` events (the real model field), falling back to top-level `model_id` for older session formats
+
 ## [0.6.2] - 2026-02-21
 
 ### Fixed

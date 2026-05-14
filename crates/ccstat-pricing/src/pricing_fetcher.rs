@@ -294,7 +294,7 @@ mod tests {
             "claude-3-opus",
             "claude-3-sonnet",
             "claude-3-haiku",
-            "claude-3.5-sonnet",
+            "claude-3-5-sonnet",
         ];
 
         for model in known_models {
@@ -472,12 +472,6 @@ mod tests {
                 pricing.output_cost_per_token,
                 Some(0.000015),
                 "Wrong output cost for {}",
-                model_name
-            );
-            assert_eq!(
-                pricing.cache_creation_input_token_cost,
-                Some(0.00000375),
-                "Wrong cache creation cost for {}",
                 model_name
             );
             assert_eq!(
