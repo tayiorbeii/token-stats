@@ -109,6 +109,8 @@ struct EventPayload {
     #[serde(rename = "type")]
     payload_type: Option<String>,
     #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
     info: Option<TokenInfo>,
 }
 
@@ -164,7 +166,16 @@ async fn parse_session_file(path: &PathBuf, session_id: &str) -> Result<Vec<Usag
 
         match event.event_type.as_str() {
             "turn_context" => {
-                if let Some(model) = event.model_id {
+                // Model can appear as payload.model (current Codex format)
+                // or as top-level model_id (older/future format)
+                if let Some(payload) = &event.payload
+                    && let Some(model) = &payload.model
+                {
+                    current_model = Some(normalize_model(model));
+                }
+                if current_model.is_none()
+                    && let Some(model) = event.model_id
+                {
                     current_model = Some(normalize_model(&model));
                 }
             }
