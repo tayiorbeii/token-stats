@@ -201,12 +201,15 @@ impl DailyDate {
 pub struct TokenCounts {
     /// Input tokens used
     pub input_tokens: u64,
-    /// Output tokens generated
+    /// Output tokens generated (includes reasoning_tokens)
     pub output_tokens: u64,
     /// Cache creation tokens
     pub cache_creation_tokens: u64,
     /// Cache read tokens
     pub cache_read_tokens: u64,
+    /// Reasoning/thinking tokens (subset of output_tokens, not additive)
+    #[serde(default)]
+    pub reasoning_tokens: u64,
 }
 
 impl TokenCounts {
@@ -222,6 +225,24 @@ impl TokenCounts {
             output_tokens,
             cache_creation_tokens,
             cache_read_tokens,
+            reasoning_tokens: 0,
+        }
+    }
+
+    /// Create new TokenCounts with reasoning tokens
+    pub fn with_reasoning(
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_creation_tokens: u64,
+        cache_read_tokens: u64,
+        reasoning_tokens: u64,
+    ) -> Self {
+        Self {
+            input_tokens,
+            output_tokens,
+            cache_creation_tokens,
+            cache_read_tokens,
+            reasoning_tokens,
         }
     }
 
@@ -240,6 +261,7 @@ impl Add for TokenCounts {
             output_tokens: self.output_tokens + other.output_tokens,
             cache_creation_tokens: self.cache_creation_tokens + other.cache_creation_tokens,
             cache_read_tokens: self.cache_read_tokens + other.cache_read_tokens,
+            reasoning_tokens: self.reasoning_tokens + other.reasoning_tokens,
         }
     }
 }
@@ -250,6 +272,7 @@ impl AddAssign for TokenCounts {
         self.output_tokens += other.output_tokens;
         self.cache_creation_tokens += other.cache_creation_tokens;
         self.cache_read_tokens += other.cache_read_tokens;
+        self.reasoning_tokens += other.reasoning_tokens;
     }
 }
 
@@ -536,6 +559,7 @@ impl UsageEntry {
                 output_tokens: raw.message.usage.output_tokens,
                 cache_creation_tokens: raw.message.usage.cache_creation_input_tokens,
                 cache_read_tokens: raw.message.usage.cache_read_input_tokens,
+                reasoning_tokens: 0,
             },
             total_cost,
             project: raw.cwd.as_ref().and_then(|cwd| {

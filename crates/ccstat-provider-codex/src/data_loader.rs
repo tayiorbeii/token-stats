@@ -133,6 +133,8 @@ struct CumulativeTokens {
     #[serde(default)]
     output_tokens: u64,
     #[serde(default)]
+    reasoning_output_tokens: u64,
+    #[serde(default)]
     total_tokens: u64,
 }
 
@@ -258,7 +260,13 @@ fn compute_delta(info: &TokenInfo, prev: Option<&CumulativeTokens>) -> TokenCoun
             last.cache_read_tokens
         };
         let cache_create = last.input_tokens.saturating_sub(cache_read);
-        return TokenCounts::new(0, last.output_tokens, cache_create, cache_read);
+        return TokenCounts::with_reasoning(
+            0,
+            last.output_tokens,
+            cache_create,
+            cache_read,
+            last.reasoning_output_tokens,
+        );
     }
 
     // Fall back to cumulative-to-delta conversion
@@ -269,27 +277,35 @@ fn compute_delta(info: &TokenInfo, prev: Option<&CumulativeTokens>) -> TokenCoun
             total.cache_read_tokens
         };
 
-        let (prev_input, prev_output, prev_cache_read) = match prev {
+        let (prev_input, prev_output, prev_cache_read, prev_reasoning) = match prev {
             Some(p) => {
                 let p_cache = if p.cached_input_tokens > 0 {
                     p.cached_input_tokens
                 } else {
                     p.cache_read_tokens
                 };
-                (p.input_tokens, p.output_tokens, p_cache)
+                (
+                    p.input_tokens,
+                    p.output_tokens,
+                    p_cache,
+                    p.reasoning_output_tokens,
+                )
             }
-            None => (0, 0, 0),
+            None => (0, 0, 0, 0),
         };
 
         let input_delta = total.input_tokens.saturating_sub(prev_input);
         let cache_read_delta = cache_read_total.saturating_sub(prev_cache_read);
         let cache_create_delta = input_delta.saturating_sub(cache_read_delta);
 
-        TokenCounts::new(
+        TokenCounts::with_reasoning(
             0,
             total.output_tokens.saturating_sub(prev_output),
             cache_create_delta,
             cache_read_delta,
+            total
+                .reasoning_output_tokens
+                .saturating_sub(prev_reasoning),
         )
     } else {
         TokenCounts::new(0, 0, 0, 0)
