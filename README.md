@@ -15,6 +15,52 @@ This project is inspired by [ccusage](https://github.com/ryoppippi/ccusage) and 
 - Zero memory leaks through RAII
 - Better error handling and recovery
 
+## What's New in v0.6
+
+- **Multi-Provider Support** — Analyze usage from Claude, Codex, OpenCode, Amp, and Pi Agent in a single tool
+- **`ccstat all`** — Combine data across all providers in one report
+- **Per-Model Cost Breakdown** — See costs broken down by model within each report
+- **Cost Estimation** — Token costs calculated from live LiteLLM pricing data with offline fallback
+- **Live Billing Block Monitor** — Real-time ASCII dashboard with progress bars, burn rate, and spend projections
+- **`ccstat watch`** — One-command shortcut for the live billing block monitor
+- **Weekly Reports** — Aggregate usage by week with configurable start-of-week
+- **Statusline Integration** — Real-time usage in Claude Code's status bar
+
+## Basic Commands
+
+| Command | Description |
+|---------|-------------|
+| `ccstat` | Today's usage (default: daily report) |
+| `ccstat daily` | Daily token usage and costs |
+| `ccstat weekly` | Weekly aggregated totals |
+| `ccstat monthly` | Monthly aggregated totals |
+| `ccstat session` | Per-session usage breakdown |
+| `ccstat blocks` | 5-hour billing block tracking |
+| `ccstat watch` | Live billing block monitor |
+| `ccstat statusline` | Claude Code status bar integration |
+
+### Multi-Provider
+
+| Command | Description |
+|---------|-------------|
+| `ccstat codex daily` | Codex usage |
+| `ccstat opencode monthly` | OpenCode usage |
+| `ccstat amp session` | Amp usage |
+| `ccstat pi daily` | Pi Agent usage |
+| `ccstat all monthly` | All providers combined |
+
+### Useful Flags
+
+| Flag | Effect |
+|------|--------|
+| `--json` | JSON output |
+| `--watch` | Live auto-refresh |
+| `--since 2025-01` | Filter start date |
+| `--until 2025-06` | Filter end date |
+| `--project NAME` | Filter by project |
+| `--verbose` / `-v` | Show info messages |
+| `--full-model-names` | Don't shorten model names |
+
 ## Features
 
 - 🔌 **Multi-Provider Support**: Claude, Codex, OpenCode, Amp, and Pi Agent
