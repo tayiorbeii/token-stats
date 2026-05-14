@@ -136,13 +136,33 @@ impl PricingFetcher {
             return Some(pricing);
         }
 
+        // Strip provider prefixes like "[pi] " that are added by multi-provider aggregation
+        let stripped = model_name
+            .strip_prefix("[pi] ")
+            .or_else(|| model_name.strip_prefix("[claude] "))
+            .or_else(|| model_name.strip_prefix("[codex] "))
+            .or_else(|| model_name.strip_prefix("[opencode] "))
+            .or_else(|| model_name.strip_prefix("[amp] "))
+            .or_else(|| model_name.strip_prefix("[all] "))
+            .unwrap_or(model_name);
+
+        if stripped != model_name
+            && let Some(pricing) = pricing_map.get(stripped)
+        {
+            debug!(
+                "Found pricing for {} after stripping prefix → {}",
+                model_name, stripped
+            );
+            return Some(pricing);
+        }
+
         // Try common variations
         let variations = [
-            model_name.to_string(),
-            format!("anthropic/{model_name}"),
-            format!("claude-{model_name}"),
-            model_name.replace("claude-3-", "claude-3."),
-            model_name.replace("claude-3.", "claude-3-"),
+            stripped.to_string(),
+            format!("anthropic/{stripped}"),
+            format!("claude-{stripped}"),
+            stripped.replace("claude-3-", "claude-3."),
+            stripped.replace("claude-3.", "claude-3-"),
         ];
 
         for variant in &variations {
@@ -154,7 +174,7 @@ impl PricingFetcher {
 
         // Partial match (contains model name)
         for (key, pricing) in pricing_map {
-            if key.contains(model_name) || model_name.contains(key) {
+            if key.contains(stripped) || stripped.contains(key) {
                 debug!(
                     "Found pricing for {} using partial match {}",
                     model_name, key

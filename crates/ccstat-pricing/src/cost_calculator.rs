@@ -172,19 +172,25 @@ impl CostCalculator {
     ) -> Result<f64> {
         match mode {
             CostMode::Auto => {
-                if let Some(cost) = pre_calculated {
-                    Ok(cost)
-                } else {
-                    match self.calculate_cost(tokens, model_name).await {
-                        Ok(cost) => Ok(cost),
-                        Err(CcstatError::UnknownModel(ref name)) => {
-                            if self.warned_models.lock().unwrap().insert(name.to_string()) {
-                                warn!(model = %name, "Unknown model encountered, cost will be reported as $0.00");
-                            }
-                            Ok(0.0)
+                // Use pre-calculated cost only when it's non-zero.
+                // Some providers (e.g. Pi Agent) always report cost=0 in their
+                // JSONL, which would suppress real calculated costs.
+                if let Some(cost) = pre_calculated
+                    && cost > 0.0
+                {
+                    return Ok(cost);
+                }
+                // Fall through to calculated cost when pre-calculated is $0
+                // but tokens are present — the provider likely doesn't report costs.
+                match self.calculate_cost(tokens, model_name).await {
+                    Ok(cost) => Ok(cost),
+                    Err(CcstatError::UnknownModel(ref name)) => {
+                        if self.warned_models.lock().unwrap().insert(name.to_string()) {
+                            warn!(model = %name, "Unknown model encountered, cost will be reported as $0.00");
                         }
-                        Err(e) => Err(e),
+                        Ok(0.0)
                     }
+                    Err(e) => Err(e),
                 }
             }
             CostMode::Calculate => self.calculate_cost(tokens, model_name).await,
